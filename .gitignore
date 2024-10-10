@@ -1,0 +1,22 @@
+# Ignore everything
+*
+
+# But not these files...
+!.gitignore
+!main.py
+
+# ...even if they are in subdirectories
+!*/
+
+# Ignore all files in any directory named data
+data/
+
+# Ignore Python compiled files
+*.pyc
+__pycache__/
+
+# Ignore common development files and directories
+.vscode/
+.idea/
+*.log
+*.csv
