@@ -5,6 +5,7 @@
 !.gitignore
 !main.py
 !requirements.txt
+!README.md
 
 # ...even if they are in subdirectories
 !*/
