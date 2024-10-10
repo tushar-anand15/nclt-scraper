@@ -12,6 +12,8 @@ from requests.exceptions import RequestException
 import logging
 from urllib.parse import urljoin
 from tqdm import tqdm
+import argparse
+from datetime import datetime
 
 # Suppress only the InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -465,10 +467,19 @@ class NCLTScraper:
         self.logger.info(f"Total PDFs failed to download: {len([r for r in download_results if r['status'] != 'success'])}")
         self.logger.info("PDF download process completed.")
 
+def validate_date(date_string):
+    try:
+        return datetime.strptime(date_string, "%d/%m/%Y").strftime("%d/%m/%Y")
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid date format: {date_string}. Use DD/MM/YYYY")
+
 def main():
-    from_date = "13/08/2024"
-    to_date = "13/08/2024"
-    scraper = NCLTScraper(from_date, to_date)
+    parser = argparse.ArgumentParser(description="NCLT Scraper")
+    parser.add_argument("start_date", type=validate_date, help="Start date in DD/MM/YYYY format")
+    parser.add_argument("end_date", type=validate_date, help="End date in DD/MM/YYYY format")
+    args = parser.parse_args()
+
+    scraper = NCLTScraper(args.start_date, args.end_date)
     scraper.run()
 
 if __name__ == "__main__":
