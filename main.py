@@ -175,7 +175,7 @@ class NCLTScraper:
         }
 
         try:
-            req = requests.get(url, params=params, verify=False, headers=headers)
+            req = requests.get(url, params=params, verify=False, headers=headers, timeout=25)
             if req.status_code == 200:
                 self.logger.info(f'Successfully fetched data for Filing No: {case_obj["Filing No."]}')
                 status = 'success'
@@ -219,105 +219,114 @@ class NCLTScraper:
 
     @staticmethod
     def parse_html_data(filename):
-        with open(filename, 'r', encoding='utf-8') as file:
-            content = file.read()
-        
-        soup = BeautifulSoup(content, 'html.parser')
-        case_data = {}
+        try:
+            with open(filename, 'r', encoding='utf-8') as file:
+                content = file.read()
+        except IOError as e:
+            print(f"Error reading file {filename}: {e}")
+            return {}
 
-        # Extract data from the first table
-        table = soup.find('table', class_='table table-bordered table-striped')
-        if table:
-            rows = table.find_all('tr')
-            for row in rows:
-                cells = row.find_all('td')
-                if len(cells) >= 2:
-                    key = cells[0].text.strip()
-                    value = cells[1].text.strip()
-                    if key == 'Filing Number':
-                        case_data['Filing No.'] = value
-                    elif key == 'Filing Date':
-                        case_data['Filing Date'] = value
-                    elif key == 'Party Name':
-                        case_data['Party Name'] = value
-                    elif key == 'Case Number':
-                        case_data['Case Number'] = value
-                    elif key == 'Registered On':
-                        case_data['Registered On'] = value
-                    elif key == 'Last Listed':
-                        case_data['Last Listed'] = value
-                    elif key == 'Case Status':
-                        case_data['Case Status'] = value
+        try:
+            soup = BeautifulSoup(content, 'html.parser')
+            case_data = {}
 
-        # Extract Petitioner and Respondent
-        all_parties_card = soup.find('div', id='collapseOne')
-        if all_parties_card:
-            parties_table = all_parties_card.find('table')
-            if parties_table:
-                rows = parties_table.find_all('tr')
-                if len(rows) > 1:  # Ensure there's a data row
-                    cells = rows[1].find_all('td')
+            # Extract data from the first table
+            table = soup.find('table', class_='table table-bordered table-striped')
+            if table:
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all('td')
                     if len(cells) >= 2:
-                        case_data['Petitioner'] = cells[0].text.strip()
-                        case_data['Respondent'] = cells[1].text.strip()
+                        key = cells[0].text.strip()
+                        value = cells[1].text.strip()
+                        if key == 'Filing Number':
+                            case_data['Filing No.'] = value
+                        elif key == 'Filing Date':
+                            case_data['Filing Date'] = value
+                        elif key == 'Party Name':
+                            case_data['Party Name'] = value
+                        elif key == 'Case Number':
+                            case_data['Case Number'] = value
+                        elif key == 'Registered On':
+                            case_data['Registered On'] = value
+                        elif key == 'Last Listed':
+                            case_data['Last Listed'] = value
+                        elif key == 'Case Status':
+                            case_data['Case Status'] = value
 
-        # Extract Listing History
-        listing_history = []
-        listing_card = soup.find('div', id='collapseTwo')
-        if listing_card:
-            history_table = listing_card.find('table')
-            if history_table:
-                rows = history_table.find_all('tr')[1:]  # Skip header row
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 4:
-                        order_link = cells[3].find('a')
-                        order_url = order_link['href'] if order_link else ''
-                        listing_history.append({
-                            'Date of Listing': cells[1].text.strip(),
-                            'Date of Upload': cells[2].text.strip(),
-                            'Order/Judgement': cells[3].text.strip(),
-                            'Order/Judgement Link': order_url
-                        })
-        case_data['Listing History'] = listing_history
+            # Extract Petitioner and Respondent
+            all_parties_card = soup.find('div', id='collapseOne')
+            if all_parties_card:
+                parties_table = all_parties_card.find('table')
+                if parties_table:
+                    rows = parties_table.find_all('tr')
+                    if len(rows) > 1:  # Ensure there's a data row
+                        cells = rows[1].find_all('td')
+                        if len(cells) >= 2:
+                            case_data['Petitioner'] = cells[0].text.strip()
+                            case_data['Respondent'] = cells[1].text.strip()
 
-        # Extract IA/MA
-        ia_ma = []
-        ia_ma_card = soup.find('div', id='collapseThree')
-        if ia_ma_card:
-            ia_ma_table = ia_ma_card.find('table')
-            if ia_ma_table:
-                rows = ia_ma_table.find_all('tr')[1:]  # Skip header row
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 4:
-                        ia_ma.append({
-                            'Filing No.': cells[1].text.strip(),
-                            'Case Number': cells[2].text.strip(),
-                            'Status': cells[3].text.strip()
-                        })
-        case_data['IA/MA'] = ia_ma
+            # Extract Listing History
+            listing_history = []
+            listing_card = soup.find('div', id='collapseTwo')
+            if listing_card:
+                history_table = listing_card.find('table')
+                if history_table:
+                    rows = history_table.find_all('tr')[1:]  # Skip header row
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 4:
+                            order_link = cells[3].find('a')
+                            order_url = order_link['href'] if order_link else ''
+                            listing_history.append({
+                                'Date of Listing': cells[1].text.strip(),
+                                'Date of Upload': cells[2].text.strip(),
+                                'Order/Judgement': cells[3].text.strip(),
+                                'Order/Judgement Link': order_url
+                            })
+            case_data['Listing History'] = listing_history
 
-        # Extract Connected Matters
-        connected_matters = []
-        connected_matters_card = soup.find('div', id='collapsefourth')
-        if connected_matters_card:
-            connected_matters_table = connected_matters_card.find('table')
-            if connected_matters_table:
-                rows = connected_matters_table.find_all('tr')[1:]  # Skip header row
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 5:
-                        connected_matters.append({
-                            'Diary No.': cells[1].text.strip(),
-                            'Case No.': cells[2].text.strip(),
-                            'Date': cells[3].text.strip(),
-                            'Status': cells[4].text.strip()
-                        })
-        case_data['Connected Matters'] = connected_matters
+            # Extract IA/MA
+            ia_ma = []
+            ia_ma_card = soup.find('div', id='collapseThree')
+            if ia_ma_card:
+                ia_ma_table = ia_ma_card.find('table')
+                if ia_ma_table:
+                    rows = ia_ma_table.find_all('tr')[1:]  # Skip header row
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 4:
+                            ia_ma.append({
+                                'Filing No.': cells[1].text.strip(),
+                                'Case Number': cells[2].text.strip(),
+                                'Status': cells[3].text.strip()
+                            })
+            case_data['IA/MA'] = ia_ma
+
+            # Extract Connected Matters
+            connected_matters = []
+            connected_matters_card = soup.find('div', id='collapsefourth')
+            if connected_matters_card:
+                connected_matters_table = connected_matters_card.find('table')
+                if connected_matters_table:
+                    rows = connected_matters_table.find_all('tr')[1:]  # Skip header row
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 5:
+                            connected_matters.append({
+                                'Diary No.': cells[1].text.strip(),
+                                'Case No.': cells[2].text.strip(),
+                                'Date': cells[3].text.strip(),
+                                'Status': cells[4].text.strip()
+                            })
+            case_data['Connected Matters'] = connected_matters
+
+        except Exception as e:
+            print(f"Error parsing HTML data from {filename}: {e}")
+            return {}
 
         return case_data
-
+    
     def download_pdf(self, pdf_info):
         headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -338,7 +347,7 @@ class NCLTScraper:
         }
         
         try:
-            response = requests.get(pdf_info['url'], headers=headers, verify=False)
+            response = requests.get(pdf_info['url'], headers=headers, verify=False, timeout=25)
             if response.status_code == 200:
                 with open(pdf_info['file_path'], 'wb') as pdf_file:
                     pdf_file.write(response.content)
