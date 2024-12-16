@@ -78,15 +78,24 @@ class NCLTScraper:
             "end_date": self.to_base64(end_date),
             "page": page
         }
-        response = requests.get(
-            "https://nclt.gov.in/order-date-wise-search",
-            params=params,
-            headers=headers,
-            verify=False,
-            timeout=25
-        )
 
-        return BeautifulSoup(response.text, "html.parser")
+        try:
+            response = requests.get(
+                "https://nclt.gov.in/order-date-wise-search",
+                params=params,
+                headers=headers,
+                verify=False,
+                timeout=250
+            )
+            if response.status_code == 200:
+                self.logger.info(f"Successfully fetched page {page} for bench {bench}")
+                return BeautifulSoup(response.text, "html.parser")
+            else:
+                self.logger.warning(f"Failed to fetch page {page} for bench {bench} - Status code: {response.status_code}")
+                return None
+        except RequestException as e:
+            self.logger.error(f"Network error while fetching page {page} for bench {bench}. Error: {str(e)}")
+            return None
 
     @staticmethod
     def process_pagination(pagination_data):
@@ -123,23 +132,25 @@ class NCLTScraper:
         all_data = []
 
         first_page_soup = self.process_page_data(bench, self.from_date, self.to_date, '1')
-        total_pages = self.process_pagination(first_page_soup)
-        all_data.extend(self.process_table_data(first_page_soup, bench))
+        if first_page_soup:
+            total_pages = self.process_pagination(first_page_soup)
+            all_data.extend(self.process_table_data(first_page_soup, bench))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_page = {
-                executor.submit(self.process_page_data, bench, self.from_date, self.to_date, total_pages, page): page
-                for page in range(2, total_pages+1)
-            }
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                future_to_page = {
+                    executor.submit(self.process_page_data, bench, self.from_date, self.to_date, total_pages, page): page
+                    for page in range(2, total_pages+1)
+                }
 
-            for future in tqdm(concurrent.futures.as_completed(future_to_page), 
-                               total=len(future_to_page), 
-                               desc=f"Fetching {bench} data",
-                               position=0, 
-                               leave=True):
-                page_data = future.result()
-                table_data = self.process_table_data(page_data, bench)
-                all_data.extend(table_data)
+                for future in tqdm(concurrent.futures.as_completed(future_to_page), 
+                                   total=len(future_to_page), 
+                                   desc=f"Fetching {bench} data",
+                                   position=0, 
+                                   leave=True):
+                    page_data = future.result()
+                    if page_data:
+                        table_data = self.process_table_data(page_data, bench)
+                        all_data.extend(table_data)
 
         return all_data
 
@@ -175,10 +186,9 @@ class NCLTScraper:
         }
 
         try:
-            req = requests.get(url, params=params, verify=False, headers=headers, timeout=25)
+            req = requests.get(url, params=params, verify=False, headers=headers, timeout=250)
             if req.status_code == 200:
                 self.logger.info(f'Successfully fetched data for Filing No: {case_obj["Filing No."]}')
-                status = 'success'
                 
                 # Save HTML file
                 html_filename = f"{case_obj['Filing No.']}.html"
@@ -195,20 +205,16 @@ class NCLTScraper:
 
                 self.logger.info(f'Saved HTML file for Filing No: {case_obj["Filing No."]} at {html_file_path}')
                 self.logger.info(f'Saved JSON file for Filing No: {case_obj["Filing No."]} at {json_file_path}')
+                return {
+                    'status': 'success', 
+                    'html_file_path': html_file_path, 
+                    'json_file_path': json_file_path, 
+                    'filing_no': case_obj['Filing No.'], 
+                    'case_data': case_data
+                }
             else:
                 self.logger.warning(f'Failed to fetch data for Filing No: {case_obj["Filing No."]} - Status code: {req.status_code}')
-                status = 'failed'
-                case_data = {}
-                html_file_path = None
-                json_file_path = None
-
-            return {
-                'status': status, 
-                'html_file_path': html_file_path, 
-                'json_file_path': json_file_path, 
-                'filing_no': case_obj['Filing No.'], 
-                'case_data': case_data
-            }
+                return {'status': 'failed', 'filing_no': case_obj['Filing No.'], 'error': f"Status code: {req.status_code}"}
 
         except RequestException as e:
             self.logger.error(f"Network error for Filing No: {case_obj['Filing No.']}. Error: {str(e)}")
@@ -217,208 +223,7 @@ class NCLTScraper:
             self.logger.error(f"Error processing Filing No: {case_obj['Filing No.']}. Error: {str(e)}")
             return {'status': 'error', 'filing_no': case_obj['Filing No.'], 'error': str(e)}
 
-    @staticmethod
-    def parse_html_data(filename):
-        try:
-            with open(filename, 'r', encoding='utf-8') as file:
-                content = file.read()
-        except IOError as e:
-            print(f"Error reading file {filename}: {e}")
-            return {}
-
-        try:
-            soup = BeautifulSoup(content, 'html.parser')
-            case_data = {}
-
-            # Extract data from the first table
-            table = soup.find('table', class_='table table-bordered table-striped')
-            if table:
-                rows = table.find_all('tr')
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 2:
-                        key = cells[0].text.strip()
-                        value = cells[1].text.strip()
-                        if key == 'Filing Number':
-                            case_data['Filing No.'] = value
-                        elif key == 'Filing Date':
-                            case_data['Filing Date'] = value
-                        elif key == 'Party Name':
-                            case_data['Party Name'] = value
-                        elif key == 'Case Number':
-                            case_data['Case Number'] = value
-                        elif key == 'Registered On':
-                            case_data['Registered On'] = value
-                        elif key == 'Last Listed':
-                            case_data['Last Listed'] = value
-                        elif key == 'Case Status':
-                            case_data['Case Status'] = value
-
-            # Extract Petitioner and Respondent
-            all_parties_card = soup.find('div', id='collapseOne')
-            if all_parties_card:
-                parties_table = all_parties_card.find('table')
-                if parties_table:
-                    rows = parties_table.find_all('tr')
-                    if len(rows) > 1:  # Ensure there's a data row
-                        cells = rows[1].find_all('td')
-                        if len(cells) >= 2:
-                            case_data['Petitioner'] = cells[0].text.strip()
-                            case_data['Respondent'] = cells[1].text.strip()
-
-            # Extract Listing History
-            listing_history = []
-            listing_card = soup.find('div', id='collapseTwo')
-            if listing_card:
-                history_table = listing_card.find('table')
-                if history_table:
-                    rows = history_table.find_all('tr')[1:]  # Skip header row
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 4:
-                            order_link = cells[3].find('a')
-                            order_url = order_link['href'] if order_link else ''
-                            listing_history.append({
-                                'Date of Listing': cells[1].text.strip(),
-                                'Date of Upload': cells[2].text.strip(),
-                                'Order/Judgement': cells[3].text.strip(),
-                                'Order/Judgement Link': order_url
-                            })
-            case_data['Listing History'] = listing_history
-
-            # Extract IA/MA
-            ia_ma = []
-            ia_ma_card = soup.find('div', id='collapseThree')
-            if ia_ma_card:
-                ia_ma_table = ia_ma_card.find('table')
-                if ia_ma_table:
-                    rows = ia_ma_table.find_all('tr')[1:]  # Skip header row
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 4:
-                            ia_ma.append({
-                                'Filing No.': cells[1].text.strip(),
-                                'Case Number': cells[2].text.strip(),
-                                'Status': cells[3].text.strip()
-                            })
-            case_data['IA/MA'] = ia_ma
-
-            # Extract Connected Matters
-            connected_matters = []
-            connected_matters_card = soup.find('div', id='collapsefourth')
-            if connected_matters_card:
-                connected_matters_table = connected_matters_card.find('table')
-                if connected_matters_table:
-                    rows = connected_matters_table.find_all('tr')[1:]  # Skip header row
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 5:
-                            connected_matters.append({
-                                'Diary No.': cells[1].text.strip(),
-                                'Case No.': cells[2].text.strip(),
-                                'Date': cells[3].text.strip(),
-                                'Status': cells[4].text.strip()
-                            })
-            case_data['Connected Matters'] = connected_matters
-
-        except Exception as e:
-            print(f"Error parsing HTML data from {filename}: {e}")
-            return {}
-
-        return case_data
-    
-    def download_pdf(self, pdf_info):
-        headers = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'max-age=0',
-            'Connection': 'keep-alive',
-            'Host': 'nclt.gov.in',
-            'Sec-Ch-Ua': '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"Windows"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
-        }
-        
-        try:
-            response = requests.get(pdf_info['url'], headers=headers, verify=False, timeout=25)
-            if response.status_code == 200:
-                with open(pdf_info['file_path'], 'wb') as pdf_file:
-                    pdf_file.write(response.content)
-                self.logger.info(f"Successfully downloaded PDF for date {pdf_info['date']}")
-                return {'date': pdf_info['date'], 'status': 'success', 'file_path': pdf_info['file_path']}
-            else:
-                self.logger.warning(f"Failed to download PDF for date {pdf_info['date']}. Status code: {response.status_code}")
-                return {'date': pdf_info['date'], 'status': 'failed', 'file_path': None}
-        except RequestException as e:
-            self.logger.error(f"Error downloading PDF for date {pdf_info['date']}. Error: {str(e)}")
-            return {'date': pdf_info['date'], 'status': 'error', 'file_path': None}
-
-    def download_pdfs(self, results):
-        base_url = 'https://www.nclt.gov.in/'
-        pdf_list = []
-
-        for result in results:
-            if result['status'] == 'success':
-                json_file = os.path.join(f'data/{self.job_id}/json', f"{result['filing_no']}.json")
-                if os.path.exists(json_file):
-                    with open(json_file, 'r') as f:
-                        case_data = json.load(f)
-                    
-                    pdf_dir = os.path.join(f'data/{self.job_id}/pdfs', case_data['Filing No.'])
-                    os.makedirs(pdf_dir, exist_ok=True)
-                    
-                    for item in case_data.get('Listing History', []):
-                        date_of_listing = item['Date of Listing']
-                        pdf_url = urljoin(base_url, item['Order/Judgement Link'])
-                        filename = f"{date_of_listing}.pdf"
-                        file_path = os.path.join(pdf_dir, filename)
-                        
-                        pdf_list.append({
-                            'url': pdf_url,
-                            'file_path': file_path,
-                            'date': date_of_listing,
-                            'filing_no': case_data['Filing No.']
-                        })
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_pdf = {executor.submit(self.download_pdf, pdf_info): pdf_info for pdf_info in pdf_list}
-            
-            download_results = []
-            for future in tqdm(concurrent.futures.as_completed(future_to_pdf), 
-                               total=len(pdf_list), 
-                               desc="Downloading PDFs",
-                               position=0, 
-                               leave=True):
-                pdf_info = future_to_pdf[future]
-                try:
-                    result = future.result()
-                    download_results.append(result)
-                    self.logger.info(f"Completed PDF download for Filing No: {pdf_info['filing_no']}, Date: {pdf_info['date']}")
-                except Exception as exc:
-                    self.logger.error(f"PDF download failed for Filing No: {pdf_info['filing_no']}, Date: {pdf_info['date']}. Error: {str(exc)}")
-                    download_results.append({'date': pdf_info['date'], 'status': 'error', 'file_path': None})
-
-        return download_results
-
-    def run(self):
-        all_bench_data = []
-        for bench in tqdm(self.bench_values, desc="Fetching data from all benches", position=0, leave=True):
-            bench_data = self.fetch_all_pages(bench)
-            all_bench_data.extend(bench_data)
-
-        all_bench_df = pd.DataFrame(all_bench_data)
-        all_bench_df['S. No.'] = range(1, len(all_bench_df) + 1)
-        csv_name = f"NCLT_ALL_BENCH_{self.job_id}.csv"
-        all_bench_df.to_csv(csv_name, index=False)
-        
-        cases = all_bench_df.to_dict(orient='records')
+    def fetch_all_case_data(self, cases):
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_case = {executor.submit(self.get_case_data, case): case for case in cases}
             
@@ -469,6 +274,101 @@ class NCLTScraper:
         
         self.logger.info(f"Total cases processed successfully: {len([r for r in results if r['status'] == 'success'])}")
         self.logger.info(f"Total cases failed: {len(failed_cases)}")
+        
+        return results
+    def download_pdf(self, pdf_info):
+        headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'max-age=0',
+            'Connection': 'keep-alive',
+            'Host': 'nclt.gov.in',
+            'Sec-Ch-Ua': '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
+        }
+        
+        try:
+            response = requests.get(pdf_info['url'], headers=headers, verify=False, timeout=250)
+            if response.status_code == 200:
+                with open(pdf_info['file_path'], 'wb') as pdf_file:
+                    pdf_file.write(response.content)
+                self.logger.info(f"Successfully downloaded PDF for date {pdf_info['date']}")
+                return {'date': pdf_info['date'], 'status': 'success', 'file_path': pdf_info['file_path']}
+            else:
+                self.logger.warning(f"Failed to download PDF for date {pdf_info['date']}. Status code: {response.status_code}")
+                return {'date': pdf_info['date'], 'status': 'failed', 'file_path': None}
+        except RequestException as e:
+            self.logger.error(f"Error downloading PDF for date {pdf_info['date']}. Error: {str(e)}")
+            return {'date': pdf_info['date'], 'status': 'error', 'file_path': None}
+
+    def download_pdfs(self, results):
+        base_url = 'https://www.nclt.gov.in/'
+        pdf_list = []
+
+        for result in results:
+            if result['status'] == 'success':
+                json_file = os.path.join(f'data/{self.job_id}/json', f"{result['filing_no']}.json")
+                if os.path.exists(json_file):
+                    with open(json_file, 'r') as f:
+                        case_data = json.load(f)
+                    
+                    pdf_dir = os.path.join(f'data/{self.job_id}/pdfs', case_data['Filing No.'])
+                    os.makedirs(pdf_dir, exist_ok=True)
+                    
+                    for item in case_data.get('Listing History', []):
+                        date_of_listing = item['Date of Listing']
+                        pdf_url = urljoin(base_url, item['Order/Judgement Link'])
+                        filename = f"{date_of_listing}.pdf"
+                        file_path = os.path.join(pdf_dir, filename)
+                        
+                        pdf_list.append({
+                            'url': pdf_url,
+                            'file_path': file_path,
+                            'date': date_of_listing,
+                            'filing_no': case_data['Filing No.']
+                        })
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_pdf = {executor.submit(self.download_pdf, pdf_info): pdf_info for pdf_info in pdf_list}
+            
+            download_results = []
+            for future in tqdm(concurrent.futures.as_completed(future_to_pdf), 
+                            total=len(pdf_list), 
+                            desc="Downloading PDFs",
+                            position=0, 
+                            leave=True):
+                pdf_info = future_to_pdf[future]
+                try:
+                    result = future.result()
+                    download_results.append(result)
+                    self.logger.info(f"Completed PDF download for Filing No: {pdf_info['filing_no']}, Date: {pdf_info['date']}")
+                except Exception as exc:
+                    self.logger.error(f"PDF download failed for Filing No: {pdf_info['filing_no']}, Date: {pdf_info['date']}. Error: {str(exc)}")
+                    download_results.append({'date': pdf_info['date'], 'status': 'error', 'file_path': None})
+
+        return download_results
+    
+    def run(self):
+        all_bench_data = []
+        for bench in tqdm(self.bench_values, desc="Fetching data from all benches", position=0, leave=True):
+            bench_data = self.fetch_all_pages(bench)
+            all_bench_data.extend(bench_data)
+
+        all_bench_df = pd.DataFrame(all_bench_data)
+        all_bench_df['S. No.'] = range(1, len(all_bench_df) + 1)
+        csv_name = f"NCLT_ALL_BENCH_{self.job_id}.csv"
+        all_bench_df.to_csv(csv_name, index=False)
+        
+        cases = all_bench_df.to_dict(orient='records')
+        results = self.fetch_all_case_data(cases)
         
         download_results = self.download_pdfs(results)
         
